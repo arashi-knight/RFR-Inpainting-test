@@ -19,6 +19,9 @@ class VGG16FeatureExtractor(nn.Module):
                 param.requires_grad = False
 
     def forward(self, image):
+        # 如果是單通道的話，複製到3通道
+        if image.size(1) == 1:
+            image = image.expand(-1, 3, -1, -1)
         results = [image]
         for i in range(3):
             func = getattr(self, 'enc_{:d}'.format(i + 1))
@@ -128,7 +131,7 @@ class RFRModule(nn.Module):
 class RFRNet(nn.Module):
     def __init__(self):
         super(RFRNet, self).__init__()
-        self.Pconv1 = PartialConv2d(3, 64, 7, 2, 3, multi_channel = True, bias = False)
+        self.Pconv1 = PartialConv2d(1, 64, 7, 2, 3, multi_channel = True, bias = False)
         self.bn1 = nn.BatchNorm2d(64)
         self.Pconv2 = PartialConv2d(64, 64, 7, 1, 3, multi_channel = True, bias = False)
         self.bn20 = nn.BatchNorm2d(64)
@@ -138,9 +141,9 @@ class RFRNet(nn.Module):
         self.RFRModule = RFRModule()
         self.Tconv = nn.ConvTranspose2d(64, 64, 4, 2, 1, bias = False)
         self.bn3 = nn.BatchNorm2d(64)
-        self.tail1 = PartialConv2d(67, 32, 3, 1, 1, multi_channel = True, bias = False)
+        self.tail1 = PartialConv2d(65, 32, 3, 1, 1, multi_channel = True, bias = False)
         self.tail2 = Bottleneck(32,8)
-        self.out = nn.Conv2d(64,3,3,1,1, bias = False)
+        self.out = nn.Conv2d(64,1,3,1,1, bias = False)
 
     def forward(self, in_image, mask):
         x1, m1 = self.Pconv1(in_image, mask)

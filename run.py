@@ -1,5 +1,8 @@
 import argparse
 import os
+
+from config import Config
+from dataloader.dataloader_init import get_dataloader
 from model import RFRNetModel
 from dataset import Dataset
 from torch.utils.data import DataLoader
@@ -23,16 +26,19 @@ def run():
         
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
     model = RFRNetModel()
+    config = Config()
+    # config.batch_size = 6
+    classes, train_dataloader, test_dataloader, val_dataloader = get_dataloader(config)
     if args.test:
         model.initialize_model(args.model_path, False)
         model.cuda()
-        dataloader = DataLoader(Dataset(args.data_root, args.mask_root, args.mask_mode, args.target_size, mask_reverse = True, training=False))
-        model.test(dataloader, args.result_save_path)
+        # dataloader = DataLoader(Dataset(args.data_root, args.mask_root, args.mask_mode, args.target_size, mask_reverse = True, training=False))
+        model.test(test_dataloader, args.result_save_path)
     else:
         model.initialize_model(args.model_path, True)
         model.cuda()
-        dataloader = DataLoader(Dataset(args.data_root, args.mask_root, args.mask_mode, args.target_size, mask_reverse = True), batch_size = args.batch_size, shuffle = True, num_workers = args.n_threads)
-        model.train(dataloader, args.model_save_path, args.finetune, args.num_iters)
+        # dataloader = DataLoader(Dataset(args.data_root, args.mask_root, args.mask_mode, args.target_size, mask_reverse = True), batch_size = args.batch_size, shuffle = True, num_workers = args.n_threads)
+        model.train(train_dataloader, args.model_save_path, args.finetune, args.num_iters)
 
 if __name__ == '__main__':
     run()

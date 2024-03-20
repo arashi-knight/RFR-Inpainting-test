@@ -1,5 +1,7 @@
 import torch
 import torch.optim as optim
+
+from myUtils import psnr_by_list, ssim_by_list, draw_by_list
 from utils.io import load_ckpt
 from utils.io import save_ckpt
 from torchvision.utils import make_grid
@@ -54,9 +56,14 @@ class RFRNetModel():
             self.optm_G = optim.Adam(filter(lambda p:p.requires_grad, self.G.parameters()), lr = 5e-5)
         print("Starting training from iteration:{:d}".format(self.iter))
         s_time = time.time()
+        psnr_list = []
+        ssim_list = []
         while self.iter<iters:
-            for items in train_loader:
-                gt_images, masks = self.__cuda__(*items)
+            for i, (imgs, structures, masks, labels, tags) in enumerate(train_loader):
+                gt_images, masks = self.__cuda__(imgs, masks)
+                # 設置cuda
+
+                # gt_images, structures, masks, labels, tags = self.__cuda__(*items)
                 masked_images = gt_images * masks
                 self.forward(masked_images, masks, gt_images)
                 self.update_parameters()
@@ -68,6 +75,24 @@ class RFRNetModel():
                     print("Iteration:%d, l1_loss:%.4f, time_taken:%.2f" %(self.iter, self.l1_loss_val/50, int_time))
                     s_time = time.time()
                     self.l1_loss_val = 0.0
+                    # 計算剩餘時間，單位為小時
+                    remain_time = (iters - self.iter) * int_time / 3600
+                    print("Remaining time:%.2f hours" %remain_time)
+
+                if self.iter % 1000 == 0:
+                    # 計算psnr,ssim
+                    this_psnr = psnr_by_list(self.real_B, self.comp_B)
+                    this_ssim = ssim_by_list(self.real_B, self.comp_B)
+                    psnr_list.append(this_psnr)
+                    ssim_list.append(this_ssim)
+                    if not os.path.exists('{:s}'.format(save_path)):
+                        os.makedirs('{:s}'.format(save_path))
+                    psnr_path = '{:s}/psnr_img.png'.format(save_path)
+                    ssim_path = '{:s}/ssim_img.png'.format(save_path)
+                    draw_by_list(psnr_list, "PSNR", psnr_path)
+                    draw_by_list(ssim_list, "SSIM", ssim_path)
+                    print("Iteration:%d, PSNR:%.4f, SSIM:%.4f" %(self.iter, this_psnr, this_ssim))
+
                 
                 if self.iter % 40000 == 0:
                     if not os.path.exists('{:s}'.format(save_path)):
