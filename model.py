@@ -49,7 +49,7 @@ class RFRNetModel():
         else:
             self.device = torch.device("cpu")
         
-    def train(self, train_loader, save_path, finetune = False, iters=450000):
+    def train(self, train_loader, save_path, finetune = False, iters=450000, test_loader=None, val_loader=None):
     #    writer = SummaryWriter(log_dir="log_info")
         self.G.train(finetune = finetune)
         if finetune:
@@ -58,7 +58,10 @@ class RFRNetModel():
         s_time = time.time()
         psnr_list = []
         ssim_list = []
+        psnr_path = '{:s}/psnr_img.png'.format(save_path)
+        ssim_path = '{:s}/ssim_img.png'.format(save_path)
         while self.iter<iters:
+            self.G.train()
             for i, (imgs, structures, masks, labels, tags) in enumerate(train_loader):
                 gt_images, masks = self.__cuda__(imgs, masks)
                 # 設置cuda
@@ -79,50 +82,96 @@ class RFRNetModel():
                     remain_time = (iters - self.iter) * int_time / 3600
                     print("Remaining time:%.2f hours" %remain_time)
 
-                if self.iter % 1000 == 0:
-                    # 計算psnr,ssim
-                    this_psnr = psnr_by_list(self.real_B, self.comp_B)
-                    this_ssim = ssim_by_list(self.real_B, self.comp_B)
-                    psnr_list.append(this_psnr)
-                    ssim_list.append(this_ssim)
-                    if not os.path.exists('{:s}'.format(save_path)):
-                        os.makedirs('{:s}'.format(save_path))
-                    psnr_path = '{:s}/psnr_img.png'.format(save_path)
-                    ssim_path = '{:s}/ssim_img.png'.format(save_path)
-                    draw_by_list(psnr_list, "PSNR", psnr_path)
-                    draw_by_list(ssim_list, "SSIM", ssim_path)
-                    print("Iteration:%d, PSNR:%.4f, SSIM:%.4f" %(self.iter, this_psnr, this_ssim))
-
-                
-                if self.iter % 40000 == 0:
+                if self.iter % 20000 == 0:
                     if not os.path.exists('{:s}'.format(save_path)):
                         os.makedirs('{:s}'.format(save_path))
                     save_ckpt('{:s}/g_{:d}.pth'.format(save_path, self.iter ), [('generator', self.G)], [('optimizer_G', self.optm_G)], self.iter)
+
+            # 測試
+            print("Testing...")
+            self.G.eval()
+            result_save_path = save_path
+            if not os.path.exists('{:s}'.format(result_save_path)):
+                os.makedirs('{:s}'.format(result_save_path))
+            count = 0
+            avg_psnr = 0
+            avg_ssim = 0
+            with torch.no_grad():
+                for i, (imgs, structures, masks, labels, tags) in enumerate(val_loader):
+                    gt_images, masks = self.__cuda__(imgs, masks)
+                    masked_images = gt_images * masks
+                    masks = torch.cat([masks] * 3, dim=1)
+                    fake_B, mask = self.G(masked_images, masks)
+                    comp_B = fake_B * (1 - masks) + gt_images * masks
+                    if not os.path.exists('{:s}/results'.format(result_save_path)):
+                        os.makedirs('{:s}/results'.format(result_save_path))
+
+
+                    imgs = gt_images.detach().cpu().numpy()
+                    comp_imgs = comp_B.detach().cpu().numpy()
+                    # 計算psnr,ssim
+                    this_psnr = psnr_by_list(imgs, comp_imgs)
+                    this_ssim = ssim_by_list(imgs, comp_imgs)
+
+                    avg_psnr += this_psnr
+                    avg_ssim += this_ssim
+
+                    grid_comp = make_grid(comp_B, nrow=1, normalize=True, scale_each=True)
+                    grid_gt = make_grid(gt_images, nrow=1, normalize=True, scale_each=True)
+                    grid_masked = make_grid(masked_images, nrow=1, normalize=True, scale_each=True)
+
+                    grid_all = torch.cat((grid_comp, grid_gt, grid_masked), dim=2)
+                    save_image(grid_all, '{:s}/results/img_{:d}.png'.format(result_save_path, count))
+                    # for k in range(comp_B.size(0)):
+                    #     count += 1
+                    #     grid = make_grid(comp_B[k:k + 1])
+                    #     file_path = '{:s}/results/img_{:d}.png'.format(result_save_path, count)
+                    #     save_image(grid, file_path)
+                    #
+                    #     grid = make_grid(masked_images[k:k + 1] + 1 - masks[k:k + 1])
+                    #     file_path = '{:s}/results/masked_img_{:d}.png'.format(result_save_path, count)
+                    #     save_image(grid, file_path)
+                avg_psnr /= len(val_loader)
+                avg_ssim /= len(val_loader)
+                print("Iteration:%d, avg_PSNR:%.4f, avg_SSIM:%.4f" %(self.iter, avg_psnr, avg_ssim))
+                psnr_list.append(avg_psnr)
+                ssim_list.append(avg_ssim)
+                draw_by_list(psnr_list, "PSNR", psnr_path,show_max=True)
+                draw_by_list(ssim_list, "SSIM", ssim_path,show_max=True)
+                print("Testing done")
+
+
+
+
+
         if not os.path.exists('{:s}'.format(save_path)):
             os.makedirs('{:s}'.format(save_path))
             save_ckpt('{:s}/g_{:s}.pth'.format(save_path, "final"), [('generator', self.G)], [('optimizer_G', self.optm_G)], self.iter)
     def test(self, test_loader, result_save_path):
         self.G.eval()
-        for para in self.G.parameters():
-            para.requires_grad = False
+        # for para in self.G.parameters():
+        #     para.requires_grad = False
+        if not os.path.exists('{:s}'.format(result_save_path)):
+            os.makedirs('{:s}'.format(result_save_path))
         count = 0
-        for items in test_loader:
-            gt_images, masks = self.__cuda__(*items)
-            masked_images = gt_images * masks
-            masks = torch.cat([masks]*3, dim = 1)
-            fake_B, mask = self.G(masked_images, masks)
-            comp_B = fake_B * (1 - masks) + gt_images * masks
-            if not os.path.exists('{:s}/results'.format(result_save_path)):
-                os.makedirs('{:s}/results'.format(result_save_path))
-            for k in range(comp_B.size(0)):
-                count += 1
-                grid = make_grid(comp_B[k:k+1])
-                file_path = '{:s}/results/img_{:d}.png'.format(result_save_path, count)
-                save_image(grid, file_path)
-                
-                grid = make_grid(masked_images[k:k+1] +1 - masks[k:k+1] )
-                file_path = '{:s}/results/masked_img_{:d}.png'.format(result_save_path, count)
-                save_image(grid, file_path)
+        with torch.no_grad():
+            for items in test_loader:
+                gt_images, masks = self.__cuda__(*items)
+                masked_images = gt_images * masks
+                masks = torch.cat([masks]*3, dim = 1)
+                fake_B, mask = self.G(masked_images, masks)
+                comp_B = fake_B * (1 - masks) + gt_images * masks
+                if not os.path.exists('{:s}/results'.format(result_save_path)):
+                    os.makedirs('{:s}/results'.format(result_save_path))
+                for k in range(comp_B.size(0)):
+                    count += 1
+                    grid = make_grid(comp_B[k:k+1])
+                    file_path = '{:s}/results/img_{:d}.png'.format(result_save_path, count)
+                    save_image(grid, file_path)
+
+                    grid = make_grid(masked_images[k:k+1] +1 - masks[k:k+1] )
+                    file_path = '{:s}/results/masked_img_{:d}.png'.format(result_save_path, count)
+                    save_image(grid, file_path)
     
     def forward(self, masked_image, mask, gt_image):
         self.real_A = masked_image
