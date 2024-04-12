@@ -163,6 +163,13 @@ class RFRNetModel():
 
     def get_grid(self, imgs, structures, masks, img_masked, comp_imgs):
 
+        # 全部转换到gpu
+        imgs = imgs.cuda()
+        structures = structures.cuda()
+        masks = masks.cuda()
+        img_masked = img_masked.cuda()
+        comp_imgs = comp_imgs.cuda()
+
         comp_imgs_structures = self.get_edge(comp_imgs)
 
         # 都转成rgb格式
