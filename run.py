@@ -43,7 +43,7 @@ def run():
 
         model.cuda()
         # dataloader = DataLoader(Dataset(args.data_root, args.mask_root, args.mask_mode, args.target_size, mask_reverse = True), batch_size = args.batch_size, shuffle = True, num_workers = args.n_threads)
-        model.train(train_dataloader, args.model_save_path, args.finetune, args.num_iters)
+        model.train(train_dataloader, args.model_save_path, args.finetune, args.num_iters, val_dataloader, val_from_trainloader,config)
 
 if __name__ == '__main__':
     run()

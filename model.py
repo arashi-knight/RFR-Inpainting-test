@@ -54,7 +54,8 @@ class RFRNetModel():
         else:
             self.device = torch.device("cpu")
         
-    def train(self, train_loader, save_path, finetune = False, iters=450000, test_loader=None, val_loader=None):
+    def train(self, train_loader, save_path, finetune = False, iters=450000, val_loader=None,val_from_train_loader=None,config=None):
+        epoch = 0
     #    writer = SummaryWriter(log_dir="log_info")
         self.G.train(finetune = finetune)
         if finetune:
@@ -76,7 +77,7 @@ class RFRNetModel():
                 self.forward(masked_images, masks, gt_images)
                 self.update_parameters()
                 self.iter += 1
-                
+                epoch += 1
                 if self.iter % 50 == 0:
                     e_time = time.time()
                     int_time = e_time - s_time
@@ -92,6 +93,8 @@ class RFRNetModel():
                         os.makedirs('{:s}'.format(self.config.model_path))
                     save_ckpt('{:s}/g_{:d}.pth'.format(self.config.model_path, self.iter ), [('generator', self.G)], [('optimizer_G', self.optm_G)], self.iter)
 
+            if epoch % 4 != 0:
+                continue
             # 測試
             print("Testing...")
             self.G.eval()
@@ -101,6 +104,7 @@ class RFRNetModel():
             count = 0
             avg_psnr = 0
             avg_ssim = 0
+            self.G.eval()
             with torch.no_grad():
                 for i, (imgs, structures, masks, labels, tags) in enumerate(val_loader):
                     gt_images, masks = self.__cuda__(imgs, masks)
@@ -133,6 +137,22 @@ class RFRNetModel():
                 draw_by_list(psnr_list, "PSNR", self.config.psnr_img_save_path,show_max=True)
                 draw_by_list(ssim_list, "SSIM", self.config.ssim_img_save_path,show_max=True)
                 print("Testing done")
+
+                for i, (imgs, structures, masks, labels, tags) in enumerate(val_from_train_loader):
+                    gt_images, masks = self.__cuda__(imgs, masks)
+                    masked_images = gt_images * masks
+                    masks = torch.cat([masks] * 3, dim=1)
+                    fake_B, mask = self.G(masked_images, masks)
+                    comp_B = fake_B * (1 - masks) + gt_images * masks
+                    if not os.path.exists(self.config.val_from_train_img_save_path_compare):
+                        os.makedirs(self.config.val_from_train_img_save_path_compare)
+
+                    imgs = gt_images.detach().cpu().numpy()
+                    comp_imgs = comp_B.detach().cpu().numpy()
+
+                    val_grid = self.get_grid(imgs, structures, masks, masked_images, comp_imgs)
+
+                    save_image(val_grid, '{:s}/{:d}.png'.format(self.config.val_from_train_img_save_path_compare, count))
 
 
 
