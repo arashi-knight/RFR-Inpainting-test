@@ -32,7 +32,7 @@ def run():
     config = Config()
     model = RFRNetModel(config)
     # config.batch_size = 6
-    classes, train_dataloader, test_dataloader, val_dataloader = get_dataloader(config)
+    classes, train_dataloader, test_dataloader, val_dataloader, val_from_trainloader = get_dataloader(config)
     if args.test:
         model.initialize_model(args.model_path, False)
         model.cuda()

@@ -88,9 +88,9 @@ class RFRNetModel():
                     print("Remaining time:%.2f hours" %remain_time)
 
                 if self.iter % 20000 == 0:
-                    if not os.path.exists('{:s}'.format(save_path)):
-                        os.makedirs('{:s}'.format(save_path))
-                    save_ckpt('{:s}/g_{:d}.pth'.format(save_path, self.iter ), [('generator', self.G)], [('optimizer_G', self.optm_G)], self.iter)
+                    if not os.path.exists('{:s}'.format(self.config.model_path)):
+                        os.makedirs('{:s}'.format(self.config.model_path))
+                    save_ckpt('{:s}/g_{:d}.pth'.format(self.config.model_path, self.iter ), [('generator', self.G)], [('optimizer_G', self.optm_G)], self.iter)
 
             # 測試
             print("Testing...")
@@ -108,8 +108,8 @@ class RFRNetModel():
                     masks = torch.cat([masks] * 3, dim=1)
                     fake_B, mask = self.G(masked_images, masks)
                     comp_B = fake_B * (1 - masks) + gt_images * masks
-                    if not os.path.exists('{:s}/results'.format(result_save_path)):
-                        os.makedirs('{:s}/results'.format(result_save_path))
+                    if not os.path.exists(self.config.val_img_save_path_compare):
+                        os.makedirs(self.config.val_img_save_path_compare)
 
 
                     imgs = gt_images.detach().cpu().numpy()
@@ -123,24 +123,24 @@ class RFRNetModel():
 
                     val_grid = self.get_grid(imgs, structures, masks, masked_images, comp_imgs)
 
-                    save_image(val_grid, '{:s}/results/img_{:d}.png'.format(result_save_path, count))
+                    save_image(val_grid, '{:s}/{:d}.png'.format(self.config.val_img_save_path_compare, count))
 
                 avg_psnr /= len(val_loader)
                 avg_ssim /= len(val_loader)
                 print("Iteration:%d, avg_PSNR:%.4f, avg_SSIM:%.4f" %(self.iter, avg_psnr, avg_ssim))
                 psnr_list.append(avg_psnr)
                 ssim_list.append(avg_ssim)
-                draw_by_list(psnr_list, "PSNR", psnr_path,show_max=True)
-                draw_by_list(ssim_list, "SSIM", ssim_path,show_max=True)
+                draw_by_list(psnr_list, "PSNR", self.config.psnr_img_save_path,show_max=True)
+                draw_by_list(ssim_list, "SSIM", self.config.ssim_img_save_path,show_max=True)
                 print("Testing done")
 
 
 
 
 
-        if not os.path.exists('{:s}'.format(save_path)):
-            os.makedirs('{:s}'.format(save_path))
-            save_ckpt('{:s}/g_{:s}.pth'.format(save_path, "final"), [('generator', self.G)], [('optimizer_G', self.optm_G)], self.iter)
+        if not os.path.exists('{:s}'.format(self.config.model_path)):
+            os.makedirs('{:s}'.format(self.config.model_path))
+            save_ckpt('{:s}/g_{:s}.pth'.format(self.config.model_path, "final"), [('generator', self.G)], [('optimizer_G', self.optm_G)], self.iter)
 
     def get_grid(self, imgs, structures, masks, img_masked, comp_imgs):
 
