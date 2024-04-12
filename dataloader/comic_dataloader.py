@@ -1,5 +1,7 @@
+import json
 import os
 import os.path
+import random
 
 import torch
 import torch.utils.data as data
@@ -8,7 +10,7 @@ from torchvision import transforms
 
 from config import Config
 from myUtils import ScaleToMinusOneToOne, one_hot, is_binary_tensor, unique_values, unique_values_and_counts, \
-    NormalizeMask, ReverseMask
+    NormalizeMask, ReverseMask, show_tensor
 
 
 def find_classes(dir):
@@ -50,6 +52,44 @@ def make_dataset(txtname, img_dir, structure_dir, mask_dir, class_to_idx, tag_di
 
     return images, structures, masks, labels, tags
 
+def make_dataset_v2(txtname, img_dir, structure_dir, mask_dir, mask_json_path, class_to_idx, tag_dir = None):
+    images = []
+    structures = []
+    masks = []
+    labels = []
+    tags = []
+
+    with open(mask_json_path, 'r', encoding='utf-8') as mask_d:
+        mask_dict = json.load(mask_d)
+
+    with open(txtname, 'r',encoding='utf-8') as lines:
+        for line in lines:
+            class_name = line.split('\\')[0]
+            _img = os.path.join(img_dir, line.strip())
+            _structure = os.path.join(structure_dir, line.strip())
+
+            # 从mask_dict中获取对应_mask(\替换为/)
+            _mask_name = mask_dict[line.strip().replace('\\', '/')]
+            _mask = os.path.join(mask_dir, _mask_name)
+
+            assert os.path.isfile(_img), _img
+            assert os.path.isfile(_mask), _mask
+            assert os.path.isfile(_structure), _structure
+            images.append(_img)
+            structures.append(_structure)
+            masks.append(_mask)
+            labels.append(class_to_idx[class_name])
+
+            # 如果tag_dir不为空，那么就把tag也加进去
+            if tag_dir is not None:
+                # .jpg -> .txt
+                # line = line.strip().replace('.jpg', '.txt')
+                _tag = os.path.join(tag_dir, line.strip().replace('.jpg', '.txt'))
+                assert os.path.isfile(_tag), _tag
+                tags.append(_tag)
+
+    return images, structures, masks, labels, tags
+
 
 class ComicDataloader(data.Dataset):
     def __init__(self, config: Config, img_transform = None, mask_transform = None, type = 'train'):
@@ -68,12 +108,17 @@ class ComicDataloader(data.Dataset):
             text_name = config.test_txt
         elif type == 'val':
             text_name = config.val_txt
+        elif type == 'val_from_train':
+            text_name = config.val_from_train_txt
         else:
             raise ValueError('type must be train or test')
 
         self.is_gray = config.is_gray
 
-        self.images, self.structures, self.masks, self.labels, self.tags = make_dataset(text_name, config.img_path, config.structure_path, config.mask_path, class_to_idx, config.tag_path)
+        if config.mask_mode == 1:
+            self.images, self.structures, self.masks, self.labels, self.tags = make_dataset(text_name, config.img_path, config.structure_path, config.mask_path, class_to_idx, config.tag_path)
+        elif config.mask_mode == 2:
+            self.images, self.structures, self.masks, self.labels, self.tags = make_dataset_v2(text_name, config.img_path, config.structure_path, config.mask_json_data_path, config.mask_json_path, class_to_idx, config.tag_path)
 
         assert (len(self.images) == len(self.labels) == len(self.masks))
 
@@ -95,6 +140,26 @@ class ComicDataloader(data.Dataset):
             _tag = open(self.tags[index], 'r', encoding='utf-8').read().strip()
         else:
             _tag = None
+
+        # # 手工实现transform
+        #
+        # # resize
+        # _img = _img.resize((self.img_size, self.img_size))
+        # _structure = _structure.resize((self.img_size, self.img_size))
+        # _mask = _mask.resize((self.img_size, self.img_size))
+        #
+        # # 概率性的水平翻转
+        # if random.random() > 0.5:
+        #     _img = _img.transpose(Image.FLIP_LEFT_RIGHT)
+        #     _structure = _structure.transpose(Image.FLIP_LEFT_RIGHT)
+        #     _mask = _mask.transpose(Image.FLIP_LEFT_RIGHT)
+        #
+        # # 转为tensor
+        # _img = transforms.ToTensor()(_img)
+        # _structure = transforms.ToTensor()(_structure)
+        # _mask = transforms.ToTensor()(_mask)
+
+
 
         if self.img_transform is not None:
             _img = self.img_transform(_img)
@@ -146,33 +211,41 @@ class Dataloder():
         trainset = ComicDataloader(config, transform_train, transform_mask, type='train')
         testset = ComicDataloader(config, transform_test, transform_mask, type='test')
         valsset = ComicDataloader(config, transform_test, transform_mask, type='val')
+        val_from_trainset = ComicDataloader(config, transform_test, transform_mask, type='val_from_train')
 
-        kwargs = {'shuffle': True,'num_workers': config.num_workers, 'pin_memory': config.pin_memory}
+        train_kwargs = {'shuffle': True,'num_workers': config.num_workers, 'pin_memory': config.pin_memory}
+        val_kwargs = {'shuffle': False,'num_workers': config.num_workers, 'pin_memory': config.pin_memory}
 
         trainloader = torch.utils.data.DataLoader(trainset, batch_size=
-        config.batch_size, **kwargs)
+        config.batch_size, **train_kwargs)
         testloader = torch.utils.data.DataLoader(testset, batch_size=
-        config.batch_size, **kwargs)
+        config.batch_size, **train_kwargs)
         valloader = torch.utils.data.DataLoader(valsset, batch_size=
-        config.batch_size, **kwargs)
+        config.batch_size, **val_kwargs)
+        val_from_trainloader = torch.utils.data.DataLoader(val_from_trainset, batch_size=
+        config.batch_size, **val_kwargs)
 
         self.classes = trainset.classes
         self.trainloader = trainloader
         self.testloader = testloader
         self.valloader = valloader
+        self.val_from_trainloader = val_from_trainloader
 
     def getloader(self):
-        return self.classes, self.trainloader, self.testloader, self.valloader
+        return self.classes, self.trainloader, self.testloader, self.valloader, self.val_from_trainloader
 
 def getloader(config: Config):
     return Dataloder(config).getloader()
 
+
+
 # 测试数据集
 def test_dataloader():
     config = Config()
+    config.mask_mode = 2
     config.batch_size = 1
     dataloader = Dataloder(config)
-    classes, trainloader, testloader, valloader = dataloader.getloader()
+    classes, trainloader, testloader, valloader, val_from_train_loader = dataloader.getloader()
     print(classes)
     for i, (imgs, structures, masks, labels, tags) in enumerate(trainloader):
         print('imgs:', type(imgs), imgs.shape)
@@ -180,6 +253,8 @@ def test_dataloader():
         print('masks:', type(masks), masks.shape)
         print('labels:', type(labels), labels)
         print('tags:', type(tags), tags)
+
+        show_tensor(masks)
 
 
         # 判断mask是否只包含0和1

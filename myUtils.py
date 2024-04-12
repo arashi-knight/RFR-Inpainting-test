@@ -8,13 +8,14 @@ import time
 import matplotlib.pyplot as plt
 import torch
 import numpy
+from PIL import Image
 from scipy.ndimage import gaussian_filter
 from torchvision import transforms
 from numpy.lib.stride_tricks import as_strided as ast
 from skimage.metrics import structural_similarity as compare_ssim
 from skimage.metrics import peak_signal_noise_ratio as compare_psnr
 from torchvision.utils import make_grid
-
+import torch.nn.functional as F
 from config import Config
 
 
@@ -204,6 +205,55 @@ def make_val_grid(imgs, masks, img_masked, outputs):
 
     return grid
 
+def make_val_grid_list(list):
+    # 纵向拼接
+    for i in range(len(list)):
+        x = make_grid(list[i], nrow=1, normalize=True, scale_each=True)
+        if i == 0:
+            grid = x
+        else:
+            grid = torch.cat((grid, x), dim=2)
+
+    return grid
+
+
+# 将灰度图像转为RGB图像，其中灰度值分别转换为RED，GREEN，BLUE，GRAY，其中mode为'GRAY'时，灰度值不变，为'GREEN'时，灰度值为GREEN值，为'RED'时，灰度值为RED值，为'BLUE'时，灰度值为BLUE值
+def gray2rgb(gray, mode = 'GRAY'):
+    # rgb = torch.cat((torch.ones_like(gray), torch.ones_like(gray), torch.ones_like(gray)), dim=1)
+
+    if mode == 'GRAY':
+        rgb = torch.cat((gray, gray, gray), dim=1)
+    elif mode == 'GREEN':
+        rgb = torch.cat((gray, torch.ones_like(gray), gray), dim=1)
+    elif mode == 'RED':
+        rgb = torch.cat(( torch.ones_like(gray), gray, gray), dim=1)
+    elif mode == 'BLUE':
+        rgb = torch.cat((gray, gray, torch.ones_like(gray)), dim=1)
+    else:
+        rgb = torch.cat((gray, gray, gray), dim=1)
+
+    # if mode == 'GRAY':
+    #     rgb[0] = gray
+    #     rgb[1] = gray
+    #     rgb[2] = gray
+    # elif mode == 'GREEN':
+    #     rgb[0] = gray
+    #     rgb[2] = gray
+    # elif mode == 'RED':
+    #     rgb[1] = gray
+    #     rgb[2] = gray
+    # elif mode == 'BLUE':
+    #     rgb[0] = gray
+    #     rgb[1] = gray
+    # else:
+    #     rgb[0] = gray
+    #     rgb[1] = gray
+    #     rgb[2] = gray
+    return rgb
+
+
+
+
 
 # 指标计算PSNR
 def psnr(img1, img2, data_range=None):
@@ -212,7 +262,7 @@ def psnr(img1, img2, data_range=None):
 
 # 指标计算SSIM
 def ssim(img1, img2, data_range=None):
-    error = compare_ssim(img1, img2, channel_axis=0, win_size=51, data_range=data_range)
+    error = compare_ssim(img1, img2, channel_axis=0, win_size=11, data_range=data_range)
     return error
 
 def ssim_by_list(frames1, frames2, data_range=None):
@@ -315,6 +365,29 @@ def print_trainable_parameters(model, is_million = True):
         print(f"{name:<25}{num_params/million:<20}")
         total += num_params
     print('total trainable params:', total/million)
+
+def print_parameters_by_layer_name(model, name, is_million = True):
+    """
+    打印模型的参数数量
+    :param model: 模型
+    :param name: 层名称
+    :param is_million: 是否以百万为单位
+    :return:
+    """
+    # 包含name的层
+    print(f"{'Layer - ' + name:<25}{'Parameter Size':<20}")
+    print("=" * 50)
+    total = 0
+
+    million = 1e6 if is_million else 1
+
+    for n, m in model.named_children():
+        # name包含在n中
+        if name in n:
+            num_params = count_parameters(m)
+            print(f"{n:<25}{num_params/million:<20}")
+            total += num_params
+    print('total params:', total/million)
 
 def get_shapes_from_tuple(input_tuple, print_type = False):
     """
@@ -452,7 +525,7 @@ def write_log(log = '', path = 'log.txt', print_log = True, bar = None):
                 print(log)
 
 # 根据list绘制折线图, 保存图片, show_max是否显示最大值，最大值显示在标题
-def draw_by_list(num_list, title, save_path, x_label = 'epoch', y_label = '', show_max = False):
+def draw_by_list(num_list, title, save_path, x_label = 'epoch', y_label = '', show_max = False, show_min = False):
     plt.plot(num_list)
     # 设置横向从0开始
     plt.xlim(0)
@@ -461,7 +534,15 @@ def draw_by_list(num_list, title, save_path, x_label = 'epoch', y_label = '', sh
     if show_max:
         max_num = max(num_list)
         max_index = num_list.index(max_num)
+        # 限制到小数点后4位
+        max_num = round(max_num, 4)
         plt.title(title + ' max:' + str(max_num) + ' at ' + str(max_index))
+    elif show_min:
+        min_num = min(num_list)
+        min_index = num_list.index(min_num)
+        # 限制到小数点后4位
+        min_num = round(min_num, 4)
+        plt.title(title + ' min:' + str(min_num) + ' at ' + str(min_index))
     plt.savefig(save_path)
     plt.close()
 
@@ -495,11 +576,11 @@ def find_max_min(tensor):
     return max_val, min_val
 
 # 获取激活函数
-def get_activation(activ):
+def get_activation(activ, inplace = True):
     if activ == 'relu':
-        return torch.nn.ReLU()
-    elif activ == 'lrelu':
-        return torch.nn.LeakyReLU(0.2)
+        return torch.nn.ReLU(inplace=inplace)
+    elif activ == 'leaky':
+        return torch.nn.LeakyReLU(0.2, inplace=inplace)
     elif activ == 'tanh':
         return torch.nn.Tanh()
     elif activ == 'sigmoid':
@@ -507,8 +588,206 @@ def get_activation(activ):
     else:
         return torch.nn.Identity()
 
+class NormWrapper(torch.nn.Module):
+    def __init__(self, num_channels, norm_type = 'instance'):
+        """
+
+        :param num_channels:
+        :param norm_type: 共有四种类型，batch, instance, layer, none
+        """
+        super(NormWrapper, self).__init__()
+        self.norm_type = norm_type
+        self.num_channels = num_channels
+
+    def forward(self, x):
+        if self.norm_type == 'batch':
+            return torch.nn.BatchNorm2d(self.num_channels)(x)
+        elif self.norm_type == 'instance':
+            return torch.nn.InstanceNorm2d(self.num_channels)(x)
+        elif self.norm_type == 'layer':
+            return torch.nn.LayerNorm(x.size()[1:]).to(x.device)(x)
+        else:
+            return x
+
+
+def dilate_mask(mask, kernel_size=21, mask_num=0):
+    """
+    膨胀掩码图像。
+
+    参数:
+        mask (torch.Tensor): 输入的掩码张量。
+        kernel_size (int): 用于膨胀操作的卷积核大小。
+        mask_num (int): mask区域的值。
+
+    返回:
+        torch.Tensor: 膨胀后的掩码张量。
+    """
+    # 定义膨胀的卷积核
+    kernel = torch.ones(1, 1, kernel_size, kernel_size).to(mask.device)
+
+    # 原有尺寸为
+    h, w = mask.size(2), mask.size(3)
+
+    if mask_num == 1:
+        # 进行填充
+        mask = F.pad(mask, (kernel_size // 2, kernel_size // 2, kernel_size // 2, kernel_size // 2), mode='reflect')
+        # 进行膨胀
+        dilated_mask = F.conv2d(mask, kernel)
+        dilated_mask = torch.clamp(dilated_mask, 0, 1)
+    else:
+        # 进行填充
+        mask = F.pad(1 - mask, (kernel_size // 2, kernel_size // 2, kernel_size // 2, kernel_size // 2), mode='reflect')
+        # 进行膨胀
+        dilated_mask = 1 - F.conv2d(1 - mask, kernel)
+        dilated_mask = torch.clamp(dilated_mask, 0, 1)
+
+    # 如果尺寸变了，放缩回原有尺寸
+    if (h != dilated_mask.size(2)) or (w != dilated_mask.size(3)):
+        dilated_mask = F.interpolate(dilated_mask, size=(h, w), mode='nearest')
+
+    # 重新二值化
+    dilated_mask = torch.where(dilated_mask > 0.5, torch.ones_like(dilated_mask), torch.zeros_like(dilated_mask))
+
+    return dilated_mask
+
+
+def shrunk_mask(mask, kernel_size=21, mask_num=0):
+    """
+    腐蚀掩码图像。
+
+    参数:
+        mask (torch.Tensor): 输入的掩码张量。
+        kernel_size (int): 用于腐蚀操作的卷积核大小。
+        mask_num (int): mask区域的值。
+
+    返回:
+        torch.Tensor: 腐蚀后的掩码张量。
+    """
+    # 定义腐蚀的卷积核
+    kernel = torch.ones(1, 1, kernel_size, kernel_size).to(mask.device)
+
+    h,w = mask.size(2), mask.size(3)
+
+    if mask_num == 1:
+        # 进行填充
+        mask = F.pad(mask, (kernel_size // 2, kernel_size // 2, kernel_size // 2, kernel_size // 2), mode='reflect')
+        # 进行腐蚀
+        shrunk_mask = 1 - F.conv2d(1 - mask, kernel)
+        shrunk_mask = torch.clamp(shrunk_mask, 0, 1)
+    else:
+        # 进行填充
+        mask = F.pad(1 - mask, (kernel_size // 2, kernel_size // 2, kernel_size // 2, kernel_size // 2), mode='reflect')
+        # 进行腐蚀
+        shrunk_mask = F.conv2d(mask, kernel)
+        shrunk_mask = torch.clamp(shrunk_mask, 0, 1)
+
+    # 如果尺寸变了，放缩回原有尺寸
+    if (h != shrunk_mask.size(2)) or (w != shrunk_mask.size(3)):
+        shrunk_mask = F.interpolate(shrunk_mask, size=(h, w), mode='nearest')
+
+    # 重新二值化
+    shrunk_mask = torch.where(shrunk_mask > 0.5, torch.ones_like(shrunk_mask), torch.zeros_like(shrunk_mask))
+
+    return shrunk_mask
+
+
+def distance_transform(image_tensor, scale = 7, bias = 0., use_sigmod = True):
+    # 将输入图像转换为二进制图像（0和1）
+    # binary_image = torch.where(image_tensor > 0.5, torch.ones_like(image_tensor), torch.zeros_like(image_tensor))
+    if use_sigmod:
+        binary_image = torch.sigmoid(image_tensor)
+    else:
+        binary_image = image_tensor
+
+    h,w = binary_image.size(2), binary_image.size(3)
+
+    # 定义卷积核
+    kernel = torch.ones(1, 1, scale, scale).to(binary_image.device)
+    # 进行填充
+    binary_image = F.pad(binary_image, (scale // 2, scale // 2, scale // 2, scale // 2), mode='reflect')
+    # 计算距离场
+    distance_transform = F.conv2d(binary_image, kernel)
+    distance_transform = torch.sqrt(distance_transform)
+    # 归一化到[0, 1]
+    distance_transform = distance_transform - torch.min(distance_transform)
+    distance_transform = distance_transform / torch.max(distance_transform)
+
+    # distance_transform不为0的地方加上一个bias
+    distance_transform = distance_transform + bias
+
+    distance_transform = torch.clamp(distance_transform, 0, 1)
+
+    # 如果尺寸变了，放缩回原有尺寸
+    if (h != distance_transform.size(2)) or (w != distance_transform.size(3)):
+        distance_transform = F.interpolate(distance_transform, size=(h, w), mode='bilinear')
+
+    return distance_transform
+
+def show_tensor(tensor):
+    """
+    显示 PyTorch 张量
+
+    参数：
+        tensor: 要显示的张量
+    """
+    # 将张量转换为 NumPy 数组
+    numpy_array = tensor.squeeze().numpy()
+
+    # 使用 Matplotlib 显示 NumPy 数组
+    plt.imshow(numpy_array, cmap='gray')
+    # plt.axis('off')  # 不显示坐标轴
+    plt.show()
+
+
 if __name__ == '__main__':
-    index = torch.tensor(3)
-    length = 5
-    hot = one_hot(index, length)
-    print(hot)
+    img_path = r'E:\CODE\project\manga\comic-inpaint\test_image\image.jpg'
+    mask_path = r'E:\CODE\project\manga\comic-inpaint\test_image\mask.jpg'
+
+    # 读取图片（灰度）
+    img = Image.open(img_path).convert('L')
+    mask = Image.open(mask_path).convert('L')
+
+    # resize
+    img = img.resize((256, 256))
+    mask = mask.resize((256, 256))
+
+    # 变为tensor
+    img = transforms.ToTensor()(img).unsqueeze(0)
+    mask = transforms.ToTensor()(mask).unsqueeze(0)
+
+    # img_x = img
+    # 增加一点噪声
+    img_x = img + torch.randn_like(img) * 0.01
+
+    p = psnr(img.numpy(), img_x.numpy(),data_range=1)
+
+    print('psnr:', p)
+
+
+
+    # mask二值化
+    mask = (mask > 0.5).float()
+
+    mask_num = 1
+
+    # 膨胀
+    dilated_mask = dilate_mask(mask, kernel_size=21, mask_num=mask_num)
+    # 腐蚀
+    shrunked_mask = shrunk_mask(mask, kernel_size=21, mask_num=mask_num)
+
+    edge = dilated_mask - shrunked_mask
+
+    # 在mask_num部分填充0.5
+    dilated_mask = torch.where(dilated_mask == mask_num, torch.tensor(0.5), dilated_mask)
+    shrunked_mask = torch.where(shrunked_mask == mask_num, torch.tensor(0.5), shrunked_mask)
+    edge = torch.where(edge == mask_num, torch.tensor(0.5), edge)
+
+    show_tensor(dilated_mask)
+    # show_tensor(shrunked_mask)
+    # show_tensor(mask)
+    # show_tensor(edge)
+
+
+    d_list = dilated_mask.unique()
+    print(d_list)
+

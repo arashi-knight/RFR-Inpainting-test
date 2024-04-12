@@ -1,6 +1,8 @@
 import torch
 import torch.optim as optim
 
+import myUtils
+from edge_detector.model_torch import res_skip
 from myUtils import psnr_by_list, ssim_by_list, draw_by_list
 from utils.io import load_ckpt
 from utils.io import save_ckpt
@@ -12,7 +14,7 @@ import time
 
 
 class RFRNetModel():
-    def __init__(self):
+    def __init__(self, config=None):
         self.G = None
         self.lossNet = None
         self.iter = None
@@ -23,6 +25,9 @@ class RFRNetModel():
         self.fake_B = None
         self.comp_B = None
         self.l1_loss_val = 0.0
+
+        self.edge_model = self.get_edge_model().cuda()
+        self.config = config
     
     def initialize_model(self, path=None, train=True):
         self.G = RFRNet()
@@ -116,21 +121,10 @@ class RFRNetModel():
                     avg_psnr += this_psnr
                     avg_ssim += this_ssim
 
-                    grid_comp = make_grid(comp_B, nrow=1, normalize=True, scale_each=True)
-                    grid_gt = make_grid(gt_images, nrow=1, normalize=True, scale_each=True)
-                    grid_masked = make_grid(masked_images, nrow=1, normalize=True, scale_each=True)
+                    val_grid = self.get_grid(imgs, structures, masks, masked_images, comp_imgs)
 
-                    grid_all = torch.cat((grid_comp, grid_gt, grid_masked), dim=2)
-                    save_image(grid_all, '{:s}/results/img_{:d}.png'.format(result_save_path, count))
-                    # for k in range(comp_B.size(0)):
-                    #     count += 1
-                    #     grid = make_grid(comp_B[k:k + 1])
-                    #     file_path = '{:s}/results/img_{:d}.png'.format(result_save_path, count)
-                    #     save_image(grid, file_path)
-                    #
-                    #     grid = make_grid(masked_images[k:k + 1] + 1 - masks[k:k + 1])
-                    #     file_path = '{:s}/results/masked_img_{:d}.png'.format(result_save_path, count)
-                    #     save_image(grid, file_path)
+                    save_image(val_grid, '{:s}/results/img_{:d}.png'.format(result_save_path, count))
+
                 avg_psnr /= len(val_loader)
                 avg_ssim /= len(val_loader)
                 print("Iteration:%d, avg_PSNR:%.4f, avg_SSIM:%.4f" %(self.iter, avg_psnr, avg_ssim))
@@ -147,6 +141,70 @@ class RFRNetModel():
         if not os.path.exists('{:s}'.format(save_path)):
             os.makedirs('{:s}'.format(save_path))
             save_ckpt('{:s}/g_{:s}.pth'.format(save_path, "final"), [('generator', self.G)], [('optimizer_G', self.optm_G)], self.iter)
+
+    def get_grid(self, imgs, structures, masks, img_masked, comp_imgs):
+
+        comp_imgs_structures = self.get_edge(comp_imgs)
+
+        # 都转成rgb格式
+        imgs_rgb = myUtils.gray2rgb(imgs)
+        structures_rgb = myUtils.gray2rgb(structures)
+        masks_rgb = myUtils.gray2rgb(masks)
+        img_masked_rgb = myUtils.gray2rgb(img_masked)
+        comp_imgs_rgb = myUtils.gray2rgb(comp_imgs)
+        comp_imgs_structures_rgb = myUtils.gray2rgb(comp_imgs_structures, mode='RED')
+        mask_red = myUtils.gray2rgb(masks, mode='RED')
+        # 从【0,1】放缩到【-1,1】
+        mask_red = (mask_red - 0.5) / 0.5
+
+        # 在img的mask区域填充为红色
+        img_masked_red = torch.where(masks.byte() == False, mask_red, imgs)  # 将 mask 区域的像素值设为红色 (1, 0, 0)
+
+        # 拼接structures和comp_imgs_structures的mask区域
+        comp_imgs_structures_rgb_x = comp_imgs_structures_rgb * (1 - masks_rgb) + structures_rgb * masks_rgb
+
+        grid_list = [imgs_rgb, structures_rgb, masks_rgb, img_masked_red, comp_imgs_rgb, comp_imgs_structures_rgb_x]
+
+        return myUtils.make_val_grid_list(grid_list)
+
+    def get_edge(self, img):
+        """
+        获取边缘
+        :param img: 图片
+        :return: 边缘
+        """
+        # with torch.no_grad():
+
+        # 将-1到1的图片放缩到0-255
+        img = (img + 1) * 127.5
+
+        edge = self.edge_model(img)
+
+        # 截取255-0
+        edge = torch.clamp(edge, 0, 255)
+
+        # 放缩到-1至1
+        edge = (edge - 127.5) / 127.5
+
+        return edge
+
+    def get_edge_model(self):
+        """
+        获取边缘检测
+        :return: 模型
+        """
+        # 获取边缘检测
+        edge_detect = res_skip()
+
+        edge_detect.load_state_dict(torch.load(self.config.edge_model_path))
+
+        myUtils.set_requires_grad(edge_detect, False)
+
+        edge_detect.cuda()
+        edge_detect.eval()
+
+        return edge_detect
+
     def test(self, test_loader, result_save_path):
         self.G.eval()
         # for para in self.G.parameters():
